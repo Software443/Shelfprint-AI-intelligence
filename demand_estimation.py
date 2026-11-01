@@ -1,12 +1,3 @@
-"""Estimate daily (served) demand from confirmed stock counts.
-
-depletion rate = units that left the shelf / days elapsed, pooled over usable intervals.
-  * No delivery ledger given: an increase in stock is treated as a restock and the interval is skipped.
-  * Delivery ledger given:    sold = count_before + delivered - count_after; negative results
-                              (unexplained increase / correction) are skipped.
-  * Intervals ending at zero are censored (true demand >= observed): excluded and flagged.
-Caveat: confirmed counts are absolute observations, so shrinkage/corrections are indistinguishable from sales.
-"""
 from datetime import datetime
 from typing import Optional, Sequence, Tuple
 

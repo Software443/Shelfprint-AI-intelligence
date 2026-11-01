@@ -1,9 +1,3 @@
-"""Contract-shaped DemandOpportunity computation.
-
-Node sends confirmed evidence (counts, deliveries, signals); Python returns ranked opportunities.
-Python never writes inventory. Total demand = served demand (depletion between confirmed counts)
-+ unmet demand (customer_request / stockout_observation units per observation day).
-"""
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Optional
