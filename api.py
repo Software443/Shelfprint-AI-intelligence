@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app import DEFAULT_DELIVERY_EFFICIENCY, MODEL_VERSION, assess_opportunity
 from opportunities import MODEL_VERSION as OPP_VERSION, compute_opportunities
 from shelf_validation import validate_analysis_response
 from validation import ValidationError, validate_record
+from vision import VisionError, analyze, provider_name
 
 app = FastAPI(title="SHELFPRINT AI Demand Intelligence API", version="0.3.0")
 MAX_BATCH = 500
@@ -27,7 +28,7 @@ def require_service_token(x_service_token: Optional[str] = Header(default=None))
 protected = APIRouter(dependencies=[Depends(require_service_token)])
 
 
-# models
+# ---------- models ----------
 class RetailerStockInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,6 +86,35 @@ class OpportunityRequest(BaseModel):
     items: list[OpportunityItemIn] = Field(min_length=1, max_length=1000)
 
 
+class VisionImage(BaseModel):
+    imageId: str = Field(min_length=1, max_length=64)
+    url: str = Field(min_length=8, max_length=2048)
+
+
+class CatalogItem(BaseModel):
+    productId: str = Field(min_length=1, max_length=64)
+    sku: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=200)
+    brand: Optional[str] = Field(default=None, max_length=100)
+    referenceImageUrls: list[str] = Field(default_factory=list, max_length=10)
+
+
+class ShelfAnalyzeRequest(BaseModel):
+    requestId: str = Field(min_length=1, max_length=64)
+    organizationId: str = Field(min_length=1, max_length=64)
+    reportId: str = Field(min_length=1, max_length=64)
+    images: list[VisionImage] = Field(min_length=1, max_length=5)
+    catalog: list[CatalogItem] = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def _unique_ids(self):
+        if len({i.imageId for i in self.images}) != len(self.images):
+            raise ValueError("imageId values must be unique")
+        if len({c.productId for c in self.catalog}) != len(self.catalog):
+            raise ValueError("catalog productId values must be unique")
+        return self
+
+
 class ShelfValidationRequest(BaseModel):
     request: dict
     response: dict
@@ -94,15 +124,15 @@ def _issues(exc: ValidationError) -> list:
     return [i.to_dict() for i in exc.issues]
 
 
-# public (health only) 
+# ---------- public (health only) ----------
 @app.get("/health")
 @app.get("/v1/health")
 def health():
     return {"status": "ok", "service": "shelfprint-demand-intelligence",
-            "modelVersion": f"{OPP_VERSION}/{MODEL_VERSION}"}
+            "modelVersion": f"{OPP_VERSION}/{MODEL_VERSION}", "visionProvider": provider_name()}
 
 
-# contract endpoints for the Node backend
+# ---------- contract endpoints for the Node backend ----------
 @protected.post("/v1/demand/opportunities")
 def demand_opportunities(data: OpportunityRequest):
     payload = data.model_dump()
@@ -111,6 +141,14 @@ def demand_opportunities(data: OpportunityRequest):
         lead_time_days=payload["leadTimeDays"], safety_stock=payload["safetyStock"],
         window_days=payload["windowDays"],
     )
+
+
+@protected.post("/v1/shelf/analyze")
+def shelf_analyze(data: ShelfAnalyzeRequest):
+    try:
+        return analyze(data.model_dump())
+    except VisionError as exc:
+        raise HTTPException(status_code=exc.http_status, detail={"code": exc.code, "message": str(exc)})
 
 
 @protected.post("/v1/shelf/validate-detections")

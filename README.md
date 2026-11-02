@@ -14,6 +14,7 @@ Mobile app -> Node/Express backend (auth, uploads, reports, inventory ledger, Mo
                     v
               This service (stateless calculator)
                 - POST /v1/demand/opportunities
+                - POST /v1/shelf/analyze (photo -> detections)
                 - POST /v1/shelf/validate-detections
 ```
 
@@ -30,10 +31,12 @@ Mobile app -> Node/Express backend (auth, uploads, reports, inventory ledger, Mo
 | `validation.py` | Input validation. Errors block scoring; warnings are surfaced but still scored |
 | `demand_estimation.py` | Daily demand from confirmed stock counts (depletion rate, optional delivery ledger) |
 | `opportunities.py` | Builds contract-shaped `DemandOpportunity` objects from Node's evidence |
+| `vision.py` | Shelf photo analysis: providers (stub, anthropic), URL safety, retries, orchestration |
 | `shelf_validation.py` | Validates vision-model output against the catalogue |
+| `evaluate.py` | Offline metrics: precision/recall by SKU, quantity error, confidence calibration |
 | `api.py` | FastAPI endpoints and service-token auth |
 | `sample_data.json` | Three sample shop/product records for `app.py` |
-| `tests/` | `test_engine.py` (engine + API), `test_contract.py` (opportunities + shelf validation) |
+| `tests/` | `test_engine.py` (engine + API), `test_contract.py` (opportunities + shelf validation), `test_vision.py` (vision + evaluation) |
 
 ## Quick start
 
@@ -48,7 +51,7 @@ export SHELFPRINT_SERVICE_TOKEN=demo-token   # Windows PowerShell: $env:SHELFPRI
 uvicorn api:app --reload           # Swagger UI: http://127.0.0.1:8000/docs
 ```
 
-Run tests: `pytest` (or `python tests/test_contract.py` without pytest).
+Run tests: `pytest` (or `python tests/test_contract.py` and `python tests/test_vision.py` without pytest).
 
 ## Authentication
 
@@ -62,6 +65,7 @@ Deploy this service on a private network only.
 |---|---|---|
 | GET | `/health`, `/v1/health` | Readiness and model version (public) |
 | POST | `/v1/demand/opportunities` | Ranked `DemandOpportunity[]` from confirmed evidence |
+| POST | `/v1/shelf/analyze` | Analyze shelf photos against the catalogue (contract section 07) |
 | POST | `/v1/shelf/validate-detections` | Validate vision output against request and catalogue |
 | POST | `/validate` | Validate one record (dev/debug) |
 | POST | `/assess` | Score one record (dev/debug) |
@@ -105,6 +109,23 @@ Response: `{asOf, modelVersion, items, needsData, skipped}`.
 **Input rules:** send only *confirmed* counts. Never send unobserved stock as 0. Quantities are individual saleable units.
 `deliveries: null` means the ledger is unknown, so any stock increase is treated as a restock. `deliveries: []` means the
 ledger is known and empty, so an unexplained increase is skipped.
+
+### `POST /v1/shelf/analyze`
+
+Body per the contract: `{requestId, organizationId, reportId, images:[{imageId,url}], catalog:[{productId,sku,name,brand?,referenceImageUrls?}]}`
+(1-5 images, up to 300 catalogue items, unique IDs). Response: `{requestId, modelVersion, detections, rejectedDetections, unmatchedObjects,
+warnings, issues, needsReview, provider, simulated, processingMs}`.
+
+- **Providers** (`SHELFPRINT_VISION_PROVIDER`): `stub` (default) returns deterministic **fake** detections and `simulated: true`, for integration
+  testing only. `anthropic` sends the images and catalogue to the Anthropic Messages API (needs `ANTHROPIC_API_KEY`; model via
+  `SHELFPRINT_VISION_MODEL`).
+- **Safety:** image URLs must be https, with no credentials, localhost or IP literals, and optionally match `SHELFPRINT_IMAGE_HOSTS`
+  (comma-separated, for example `res.cloudinary.com`). Node still owns upload validation of actual file bytes and size.
+- **Catalogue-constrained:** the prompt allows only catalogue products and treats text inside images as data. Every output also passes through
+  `shelf_validation.py`, so invented products are dropped and counted as unmatched.
+- **Failures:** provider unreachable returns 502, timeout returns 504, missing configuration returns 503. In those cases Node should keep the draft for manual
+  review. Unparseable model output returns 200 with no detections and a warning.
+- Bounding boxes from a general vision model are approximate. Model confidence is uncalibrated; measure it with `evaluate.py`.
 
 ### `POST /v1/shelf/validate-detections`
 
@@ -166,7 +187,7 @@ intervals, and is multiplied by 0.8 if the latest count is older than 7 days. It
 - Missed units are estimates, never verified lost sales. Shelf-price value is not manufacturer revenue.
 - Placeholders needing calibration: 14-day window, 3-day floor, 30-unit demand cap, confidence formula, staleness threshold.
 - Not yet implemented: missed revenue in NGN (needs `unitPriceNGN` and a stated valuation basis), real delivery efficiency
-  from routing, projected on-hand for stale counts, and the vision model itself.
+  from routing, projected on-hand for stale counts, and a labelled evaluation set for the vision model (the `evaluate.py` harness is ready).
 - FastAPI endpoint tests were written but could not be executed in the authoring environment; run `pytest` locally.
 
 ## Open decisions for the team
