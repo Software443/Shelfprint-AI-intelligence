@@ -48,14 +48,14 @@ def test_anthropic_happy_path_filters_invented_products():
     assert out["modelVersion"].startswith("anthropic:")
 
 
-def test_request_body_is_catalogue_constrained_and_temperature_zero():
+def test_request_body_is_catalogue_constrained_and_has_no_sampling_params():
     seen = {}
     def post(url, headers, body, timeout):
         seen.update(body=body, headers=headers)
         return reply({"detections": []})
     analyze(REQ, provider(post))
     b = seen["body"]
-    assert b["temperature"] == 0 and "ONLY products from the provided catalogue" in b["system"]
+    assert not {"temperature", "top_p", "top_k"} & set(b) and "ONLY products from the provided catalogue" in b["system"]
     assert any(c["type"] == "image" for c in b["messages"][0]["content"])
     assert "p2" in b["messages"][0]["content"][-1]["text"] and seen["headers"]["x-api-key"] == "k"
 
@@ -90,6 +90,24 @@ def test_image_url_rules():
     validate_image_url("https://res.cloudinary.com/x.jpg", "i", ["cloudinary.com"])
     e = raises("invalid_image_url", lambda: validate_image_url("http://x.com/a?sig=SECRET", "i"))
     assert "SECRET" not in str(e)
+
+
+def test_stub_disabled_in_production_unless_allowed():
+    import os
+    from vision import get_provider
+    old = {k: os.environ.get(k) for k in ("SHELFPRINT_ENV", "SHELFPRINT_VISION_PROVIDER", "SHELFPRINT_ALLOW_STUB")}
+    try:
+        os.environ.update(SHELFPRINT_ENV="production", SHELFPRINT_VISION_PROVIDER="stub")
+        os.environ.pop("SHELFPRINT_ALLOW_STUB", None)
+        raises("provider_not_configured", get_provider)
+        os.environ["SHELFPRINT_ALLOW_STUB"] = "1"
+        assert get_provider().name == "stub"
+        os.environ["SHELFPRINT_ENV"] = "development"
+        os.environ.pop("SHELFPRINT_ALLOW_STUB")
+        assert get_provider().name == "stub"
+    finally:
+        for k, val in old.items():
+            os.environ.pop(k, None) if val is None else os.environ.__setitem__(k, val)
 
 
 def test_parse_model_json():
