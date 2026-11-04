@@ -162,7 +162,8 @@ class AnthropicProvider:
             content.append({"type": "text", "text": f"Image imageId={img['imageId']}:"})
             content.append({"type": "image", "source": {"type": "url", "url": img["url"]}})
         content.append({"type": "text", "text": "Catalogue (data):\n" + json.dumps(catalogue) + "\n\n" + OUTPUT_SPEC})
-        return {"model": self.model, "max_tokens": 2000, "temperature": 0, "system": SYSTEM_PROMPT,
+        # No temperature/top_p/top_k: Claude Sonnet 5.5 rejects them with HTTP 400. max_tokens leaves room for thinking.
+        return {"model": self.model, "max_tokens": 4000, "system": SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": content}]}
 
     def detect(self, request: dict) -> dict:
@@ -203,9 +204,16 @@ def provider_name() -> str:
     return os.getenv("SHELFPRINT_VISION_PROVIDER", "stub").lower()
 
 
+def is_production() -> bool:
+    return os.getenv("SHELFPRINT_ENV", "").lower() in ("production", "prod")
+
+
 def get_provider():
     name = provider_name()
     if name == "stub":
+        if is_production() and os.getenv("SHELFPRINT_ALLOW_STUB") != "1":
+            raise VisionError("provider_not_configured", 503,
+                              "Stub vision provider is disabled in production. Set SHELFPRINT_VISION_PROVIDER=anthropic.")
         return StubProvider()
     if name == "anthropic":
         return AnthropicProvider()

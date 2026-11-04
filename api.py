@@ -10,7 +10,7 @@ from app import DEFAULT_DELIVERY_EFFICIENCY, MODEL_VERSION, assess_opportunity
 from opportunities import MODEL_VERSION as OPP_VERSION, compute_opportunities
 from shelf_validation import validate_analysis_response
 from validation import ValidationError, validate_record
-from vision import VisionError, analyze, provider_name
+from vision import DEFAULT_MODEL, VisionError, analyze, provider_name
 
 app = FastAPI(title="SHELFPRINT AI Demand Intelligence API", version="0.3.0")
 MAX_BATCH = 500
@@ -129,7 +129,9 @@ def _issues(exc: ValidationError) -> list:
 @app.get("/v1/health")
 def health():
     return {"status": "ok", "service": "shelfprint-demand-intelligence",
-            "modelVersion": f"{OPP_VERSION}/{MODEL_VERSION}", "visionProvider": provider_name()}
+            "modelVersion": f"{OPP_VERSION}/{MODEL_VERSION}", "visionProvider": provider_name(),
+            "visionModel": os.getenv("SHELFPRINT_VISION_MODEL", DEFAULT_MODEL) if provider_name() == "anthropic" else None,
+            "environment": os.getenv("SHELFPRINT_ENV", "development")}
 
 
 # ---------- contract endpoints for the Node backend ----------
