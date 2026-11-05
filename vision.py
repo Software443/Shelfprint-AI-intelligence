@@ -23,7 +23,7 @@ log = logging.getLogger("shelfprint.vision")
 
 PROMPT_VERSION = "prompt-v1"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-sonnet-5-5"
+DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
 
 class VisionError(Exception):
@@ -182,7 +182,35 @@ class AnthropicProvider:
                 continue
             if status == 200:
                 break
-            last = VisionError("provider_error", 502, f"Vision provider returned HTTP {status}.")
+            # Log Anthropic's structured error without exposing credentials,
+            # image URLs, request bodies or arbitrary untrusted response text.
+            error_obj = data.get("error", {}) if isinstance(data, dict) else {}
+            if not isinstance(error_obj, dict):
+                error_obj = {}
+            provider_type = str(error_obj.get("type", "unknown"))[:80]
+            provider_message = str(error_obj.get("message", ""))
+            # Only emit safe, fixed diagnostic categories in logs and HTTP errors.
+            if status == 401:
+                hint = "API key rejected. Check ANTHROPIC_API_KEY."
+            elif status == 402 or "credit" in provider_message.lower() or "billing" in provider_message.lower():
+                hint = "Anthropic billing or credits issue. Check your console."
+            elif status == 403:
+                hint = "Anthropic account lacks permission for this request."
+            elif status == 404:
+                hint = "Model not found. Check SHELFPRINT_VISION_MODEL."
+            elif status == 400:
+                hint = "Invalid Anthropic request. Check model and image format."
+            elif status == 413:
+                hint = "Image payload exceeds Anthropic size limits."
+            elif status == 429:
+                hint = "Anthropic rate limit or quota reached."
+            elif status >= 500:
+                hint = "Anthropic is temporarily unavailable."
+            else:
+                hint = "Check Anthropic configuration and provider logs."
+            log.error("Anthropic request failed: status=%s type=%s hint=%s model=%s attempt=%d",
+                      status, provider_type, hint, self.model, attempt + 1)
+            last = VisionError("provider_error", 502, f"Vision provider returned HTTP {status}. {hint}")
             if status != 429 and status < 500:
                 raise last  # client errors will not succeed on retry
         else:

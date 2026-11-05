@@ -1,3 +1,8 @@
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import hmac
 import os
 from datetime import datetime
